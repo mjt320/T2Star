@@ -1,4 +1,4 @@
-function [S0,R2s,T2s,RSq,model] = fit_R2s(TE_s,magnitude,isFit,threshold1,threshold2);
+function [S0,R2s,T2s,RSq,model] = fit_R2s(TE_s,magnitude,isFit,threshold1,threshold2,options)
 % Fit a single T2/T2* decay
 % OUTPUT:
 % S0: estimate of signal amplitude for TE=0
@@ -12,8 +12,11 @@ function [S0,R2s,T2s,RSq,model] = fit_R2s(TE_s,magnitude,isFit,threshold1,thresh
 % isFIT: vector of ones and zeros determining which signals should be fit
 % threshold1: only do fitting if first signal is greater than this (to prevent fitting of air voxels)
 % threshold2: only include signals greater than this value in fitting  (to prevent fitting of noise at long TE)
+% options.mode: linear (use linear fit only), nonlinear (default; initial linear estimate followed by non-linear fit)
 
 tic;
+
+if ~isfield(options,'mode'); options.mode='nonlinear'; end
 
 S0=nan(1,1);
 R2s=nan(1,1);
@@ -25,40 +28,76 @@ s=@(coef,t) coef(1)*exp(-coef(2)*t); % this is the signal model function
 
 if magnitude(1)<threshold1; return; end %skip low intensity voxels
 
-t=TE_s(isFit==1); %define independent variable (time)
-y=squeeze(magnitude(isFit==1)); %define dependent variable (signal)
+t=TE_s(isFit==1); %define independent variable (time); includes only values to be fitted
+y=squeeze(magnitude(isFit==1)); %define dependent variable (signal); includes only values to be fitted
 
-%% use linear regression to determine initial guess
-if size(y,1)>2; NLinReg=3; else NLinReg=2; end
-temp=regress(log(y(1:NLinReg)),[ones(NLinReg,1) t(1:NLinReg)]);
-x0=[exp(temp(1)) -temp(2)];
-if x0(1)<0 || imag(x0(1))~=0 || isnan(x0(1)) || isinf(x0(1))...
-        || x0(2)<0 || imag(x0(2))~=0 || isnan(x0(2)) || isinf(x0(2)); x0=[1000 10]; end
-
-
-%% use non-linear least squares to fit
-typicalX=[max(y) 50];
-
-% use only data points above opts.threshold2 to avoid fitting noise
-% if there are fewer than 2 data points selected then don't fit
-idx_reduced=y>threshold2;
-if sum(idx_reduced)<2; return; end
-
-[x,resnorm,residual,exitflag,output]=lsqcurvefit(s,x0,t(idx_reduced),y(idx_reduced)...
-    ,[],[],optimset('Display','off','TypicalX',typicalX,'Algorithm','levenberg-marquardt'));
-
-S0=x(1); R2s=x(2);
-model(idx_reduced)=s(x,t(idx_reduced));
-RSq=1 - sum((y(idx_reduced).'-squeeze(model(idx_reduced)).').^2) / (sum((y(idx_reduced).'-mean(y(idx_reduced))).^2));
-
-timeElapsed=toc;
-
-if rand<0.001 %randomly plot data to check it's working
-    figure(1),plot(t,y,'ko',t(idx_reduced),squeeze(model(idx_reduced)),'b-')
-    title({['Initial coefficients: ' num2str(x0)] ['Fitted coefficients: ' num2str(x)] ['Time elapsed: ' num2str(timeElapsed)] ['Exit flag: ' num2str(exitflag)] ['Evaluations: ' num2str(output.funcCount)]});
-    pause(0.1);
+switch options.mode
+    case 'nonlinear'
+        
+        %% use linear regression to determine initial guess
+        if size(y,1)>2; NLinReg=3; else NLinReg=2; end %use only first 3 data points (2 if only 2 available)
+        temp=regress(log(y(1:NLinReg)),[ones(NLinReg,1) t(1:NLinReg)]);
+        x0=[exp(temp(1)) -temp(2)];
+        if x0(1)<0 || imag(x0(1))~=0 || isnan(x0(1)) || isinf(x0(1))... %if values are unreasonable, set default initial values
+                || x0(2)<0 || imag(x0(2))~=0 || isnan(x0(2)) || isinf(x0(2)); x0=[1000 10]; end
+        
+        
+        %% use non-linear least squares to fit
+        typicalX=[max(y) 50];
+        
+        % use only data points above opts.threshold2 to avoid fitting noise
+        % if there are fewer than 2 data points selected then don't fit
+        idx_reduced=y>threshold2;
+        if sum(idx_reduced)<2; return; end
+        
+        [x,resnorm,residual,exitflag,output]=lsqcurvefit(s,x0,t(idx_reduced),y(idx_reduced)...
+            ,[],[],optimset('Display','off','TypicalX',typicalX,'Algorithm','levenberg-marquardt'));
+        
+        S0=x(1);
+        R2s=x(2);
+        model(idx_reduced)=s(x,t(idx_reduced));
+        RSq=1 - sum((y(idx_reduced).'-squeeze(model(idx_reduced)).').^2) / (sum((y(idx_reduced).'-mean(y(idx_reduced))).^2));
+        T2s=1/R2s;
+        
+        timeElapsed=toc;
+        
+        if rand<0.001 %randomly plot data to check it's working
+            figure(1),plot(t,y,'ko',t(idx_reduced),squeeze(model(idx_reduced)),'b-')
+            title({['Initial coefficients: ' num2str(x0)] ['Fitted coefficients: ' num2str(x)] ['Time elapsed: ' num2str(timeElapsed)] ['Exit flag: ' num2str(exitflag)] ['Evaluations: ' num2str(output.funcCount)]});
+            pause(0.1);
+        end
+        
+    case 'linear'
+        
+        % use only data points above opts.threshold2 to avoid fitting noise
+        % if there are fewer than 2 data points selected then don't fit
+        idx_reduced=y>threshold2;
+        if sum(idx_reduced)<2; return; end
+        
+        
+        %% use linear regression to determine parameters
+        temp=regress(log(y(idx_reduced)),[ones(size(t(idx_reduced))) t(idx_reduced)]);
+        x0=[exp(temp(1)) -temp(2)];
+        
+        if imag(x0(1))~=0 || isnan(x0(1)) || isinf(x0(1))... %check parameter estimates are reasonable
+                || imag(x0(2))~=0 || isnan(x0(2)) || isinf(x0(2)); return; end
+        
+        S0=x0(1);
+        R2s=x0(2);
+        model(idx_reduced)=s(x0,t(idx_reduced));
+        RSq=1 - sum((y(idx_reduced).'-squeeze(model(idx_reduced)).').^2) / (sum((y(idx_reduced).'-mean(y(idx_reduced))).^2));
+        T2s=1/R2s;
+        
+        timeElapsed=toc;
+        
+        if rand<0.001 %randomly plot data to check it's working
+            figure(1),plot(t,y,'ko',t(idx_reduced),squeeze(model(idx_reduced)),'b-')
+            title({['Coefficients: ' num2str(x0)] ['Time elapsed: ' num2str(timeElapsed)]});
+            pause(0.1);
+        end
+        
+    otherwise
+        error('R2* fitting mode not recognised.');
+        
 end
-
-T2s=1/R2s;
-
 end
