@@ -5,7 +5,7 @@ mkdir(opts.niftiDir); delete([opts.niftiDir '/*.*']);
 %% convert dicoms to 3D niftis
 dicomPaths=getMultipleFilePaths([opts.dicomDir '/*.dcm']);
 if isempty(dicomPaths); dicomPaths=getMultipleFilePaths([opts.dicomDir '/*.IMA']); end;
-system(['dcm2niix -f magn_image_%e -o ' opts.niftiDir ' ' opts.dicomDir]);
+system(['dcm2niix -f magn_image_%e -t n -v n -b y -z n -o ' opts.niftiDir ' ' opts.dicomDir]);
 
 %% make a 4D nifti containing only magnitude data
 fileList={};
